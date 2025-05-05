@@ -1,8 +1,11 @@
 module main.go
 
-go 1.23.0
+go 1.21
 
-toolchain go1.23.3
+require (
+	github.com/gin-gonic/gin v1.10.0
+	github.com/tebeka/selenium v0.9.9
+)
 
 require (
 	github.com/bytedance/sonic v1.13.2 // indirect
@@ -31,5 +34,3 @@ require (
 	google.golang.org/protobuf v1.36.6 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-
-require github.com/gin-gonic/gin v1.10.0
