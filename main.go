@@ -20,7 +20,7 @@ func initDB() {
 	var err error
 
 	// Ambil kredensial dari env var
-	instanceConn := os.Getenv("INSTANCE_CONNECTION_NAME") // "cool-state-453106-d5:us-central1:sps-db"
+	instanceConn := os.Getenv("INSTANCE_CONNECTION_NAME") // e.g. "cool-state-453106-d5:us-central1:sps-db"
 	user := os.Getenv("DB_USER")                          // mis. "postgres"
 	pass := os.Getenv("DB_PASS")                          // password DB
 	name := os.Getenv("DB_NAME")                          // nama DB, mis. "sps_db"
@@ -29,10 +29,11 @@ func initDB() {
 		panic("Env vars INSTANCE_CONNECTION_NAME, DB_USER, DB_PASS, DB_NAME must be set")
 	}
 
-	// Pakai Unix socket Cloud Run menyediakan di /cloudsql/<instance-connection-name>
+	// Gunakan Unix socket yang disediakan Cloud Run di /cloudsql/<instance-connection-name>
 	socketDir := fmt.Sprintf("/cloudsql/%s", instanceConn)
+	// Sertakan port=5432 eksplisit agar pgx tahu gunakan port default
 	dsn := fmt.Sprintf(
-		"host=%s user=%s password=%s dbname=%s sslmode=disable",
+		"host=%s port=5432 user=%s password=%s dbname=%s sslmode=disable",
 		socketDir, user, pass, name,
 	)
 
@@ -48,14 +49,18 @@ func initDB() {
 }
 
 func main() {
+	// Inisialisasi DB
 	initDB()
 	defer db.Close()
 
+	// Set Gin mode
 	if os.Getenv("GIN_MODE") == "release" {
 		gin.SetMode(gin.ReleaseMode)
 	}
 
 	r := gin.Default()
+
+	// Middleware CORS
 	r.Use(func(c *gin.Context) {
 		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
@@ -67,6 +72,7 @@ func main() {
 		c.Next()
 	})
 
+	// Routes
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
@@ -74,6 +80,7 @@ func main() {
 	r.POST("/signin", signinHandler)
 	r.POST("/itinerary", handleItineraryRequest)
 
+	// Start server
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
