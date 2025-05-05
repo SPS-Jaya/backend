@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -91,6 +92,9 @@ type User struct {
 }
 
 func main() {
+	// Add startup delay to allow Cloud Run to initialize
+	time.Sleep(5 * time.Second)
+
 	initDB()
 	// Set Gin to release mode in production
 	if os.Getenv("GIN_MODE") == "release" {
@@ -122,13 +126,20 @@ func main() {
 			})
 			return
 		}
-		if err := db.Ping(); err != nil {
+
+		// Try to ping the database with a timeout
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+		defer cancel()
+
+		err := db.PingContext(ctx)
+		if err != nil {
 			c.JSON(http.StatusServiceUnavailable, gin.H{
 				"status": "database connection failed",
 				"error":  err.Error(),
 			})
 			return
 		}
+
 		c.JSON(http.StatusOK, gin.H{
 			"status": "ok",
 		})
