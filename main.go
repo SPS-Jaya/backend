@@ -2,13 +2,12 @@ package main
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
-
-	"database/sql"
 
 	"github.com/gin-gonic/gin"
 	_ "github.com/lib/pq"
@@ -18,21 +17,29 @@ import (
 var db *sql.DB
 
 func initDB() {
-	pw := os.Getenv("dbpw")
-	if pw == "" {
-		fmt.Println("Warning: dbpw environment variable is not set")
+	// Get environment variables
+	instanceConnectionName := os.Getenv("INSTANCE_CONNECTION_NAME")
+	dbUser := os.Getenv("DB_USER")
+	dbPass := os.Getenv("DB_PASS")
+	dbName := os.Getenv("DB_NAME")
+
+	if instanceConnectionName == "" || dbUser == "" || dbPass == "" || dbName == "" {
+		fmt.Println("One or more required environment variables are not set")
 		return
 	}
 
-	connStr := fmt.Sprintf("host=34.122.48.1 port=5432 user=postgres password=%s dbname=postgres sslmode=disable", pw)
+	// Use Unix socket for Cloud SQL
+	socketDir := "/cloudsql"
+	dsn := fmt.Sprintf("host=%s/%s user=%s password=%s dbname=%s sslmode=disable",
+		socketDir, instanceConnectionName, dbUser, dbPass, dbName)
+
 	var err error
-	db, err = sql.Open("postgres", connStr)
+	db, err = sql.Open("postgres", dsn)
 	if err != nil {
 		fmt.Printf("Error opening database connection: %v\n", err)
 		return
 	}
 
-	// Try to ping the database with a timeout
 	if err = db.Ping(); err != nil {
 		fmt.Printf("Error connecting to database: %v\n", err)
 		return
