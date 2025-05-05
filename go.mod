@@ -1,4 +1,4 @@
-module main.go
+module backend
 
 go 1.21.13
 

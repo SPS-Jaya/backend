@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	_ "github.com/lib/pq"
@@ -29,9 +30,9 @@ func initDB() {
 		return
 	}
 
-	// Use Unix socket for Cloud SQL
-	dsn := fmt.Sprintf("host=/cloudsql/%s dbname=%s user=%s password=%s sslmode=disable",
-		instanceConnectionName, dbName, dbUser, dbPass)
+	// Use TCP connection through Cloud SQL proxy
+	dsn := fmt.Sprintf("host=127.0.0.1 port=5432 user=%s password=%s dbname=%s sslmode=disable",
+		dbUser, dbPass, dbName)
 
 	fmt.Printf("Attempting to connect with DSN: %s\n", dsn)
 
@@ -47,9 +48,18 @@ func initDB() {
 	db.SetMaxIdleConns(1)
 	db.SetConnMaxLifetime(0)
 
-	// Try to ping the database
-	if err = db.Ping(); err != nil {
-		fmt.Printf("Error connecting to database: %v\n", err)
+	// Try to ping the database with retries
+	for i := 0; i < 5; i++ {
+		err = db.Ping()
+		if err == nil {
+			break
+		}
+		fmt.Printf("Attempt %d: Error connecting to database: %v\n", i+1, err)
+		time.Sleep(time.Second * 2)
+	}
+
+	if err != nil {
+		fmt.Printf("Final error connecting to database: %v\n", err)
 		return
 	}
 
