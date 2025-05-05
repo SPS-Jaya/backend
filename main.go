@@ -19,15 +19,26 @@ var db *sql.DB
 
 func initDB() {
 	pw := os.Getenv("dbpw")
+	if pw == "" {
+		fmt.Println("Warning: dbpw environment variable is not set")
+		return
+	}
+
 	connStr := fmt.Sprintf("host=34.122.48.1 port=5432 user=postgres password=%s dbname=postgres sslmode=disable", pw)
 	var err error
 	db, err = sql.Open("postgres", connStr)
 	if err != nil {
-		panic(err)
+		fmt.Printf("Error opening database connection: %v\n", err)
+		return
 	}
+
+	// Try to ping the database with a timeout
 	if err = db.Ping(); err != nil {
-		panic(err)
+		fmt.Printf("Error connecting to database: %v\n", err)
+		return
 	}
+
+	fmt.Println("Successfully connected to database")
 }
 
 type Traveler struct {
@@ -79,6 +90,20 @@ func main() {
 	// Define routes
 	r.POST("/itinerary", handleItineraryRequest)
 	r.GET("/health", func(c *gin.Context) {
+		// Check database connection in health check
+		if db == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"status": "database not connected",
+			})
+			return
+		}
+		if err := db.Ping(); err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"status": "database connection failed",
+				"error":  err.Error(),
+			})
+			return
+		}
 		c.JSON(http.StatusOK, gin.H{
 			"status": "ok",
 		})
@@ -94,7 +119,9 @@ func main() {
 
 	// Start the server
 	fmt.Printf("Server is running on port %s\n", port)
-	r.Run(":" + port)
+	if err := r.Run(":" + port); err != nil {
+		fmt.Printf("Error starting server: %v\n", err)
+	}
 }
 
 func handleItineraryRequest(c *gin.Context) {
