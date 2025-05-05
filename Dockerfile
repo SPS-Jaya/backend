@@ -19,9 +19,12 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o main .
 # Use a minimal alpine image
 FROM alpine:latest
 
-# Install ca-certificates and create directory for Cloud SQL socket
-RUN apk --no-cache add ca-certificates && \
-    mkdir -p /cloudsql
+# Install required packages
+RUN apk --no-cache add \
+    ca-certificates \
+    postgresql-client \
+    && mkdir -p /cloudsql \
+    && chmod 777 /cloudsql
 
 # Set working directory
 WORKDIR /app

@@ -24,14 +24,16 @@ func initDB() {
 	dbName := os.Getenv("DB_NAME")
 
 	if instanceConnectionName == "" || dbUser == "" || dbPass == "" || dbName == "" {
-		fmt.Println("One or more required environment variables are not set")
+		fmt.Printf("Missing environment variables:\nINSTANCE_CONNECTION_NAME: %s\nDB_USER: %s\nDB_PASS: %s\nDB_NAME: %s\n",
+			instanceConnectionName, dbUser, dbPass, dbName)
 		return
 	}
 
 	// Use Unix socket for Cloud SQL
-	socketDir := "/cloudsql"
-	dsn := fmt.Sprintf("host=%s/%s user=%s password=%s dbname=%s sslmode=disable",
-		socketDir, instanceConnectionName, dbUser, dbPass, dbName)
+	dsn := fmt.Sprintf("host=/cloudsql/%s dbname=%s user=%s password=%s sslmode=disable",
+		instanceConnectionName, dbName, dbUser, dbPass)
+
+	fmt.Printf("Attempting to connect with DSN: %s\n", dsn)
 
 	var err error
 	db, err = sql.Open("postgres", dsn)
@@ -40,6 +42,12 @@ func initDB() {
 		return
 	}
 
+	// Set connection pool settings
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	db.SetConnMaxLifetime(0)
+
+	// Try to ping the database
 	if err = db.Ping(); err != nil {
 		fmt.Printf("Error connecting to database: %v\n", err)
 		return
