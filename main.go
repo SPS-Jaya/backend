@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,21 +10,58 @@ import (
 	"os"
 
 	"github.com/gin-gonic/gin"
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"golang.org/x/crypto/bcrypt"
 )
 
-var users = make(map[string]string) // Simpan username dan password hashed di memori
+var db *sql.DB
+
+// initDB menginisialisasi koneksi ke PostgreSQL
+func initDB() {
+	var err error
+
+	// Ambil kredensial dari environment variables
+	host := os.Getenv("DB_HOST")       // e.g. "34.122.48.1"
+	port := os.Getenv("DB_PORT")       // e.g. "5432"
+	user := os.Getenv("DB_USER")       // e.g. "postgres"
+	pass := os.Getenv("DB_PASS")       // password Anda
+	name := os.Getenv("DB_NAME")       // nama database, misal "sps_db"
+	sslmode := os.Getenv("DB_SSLMODE") // e.g. "disable" atau "require"
+
+	if host == "" || port == "" || user == "" || pass == "" || name == "" {
+		panic("Environment variables DB_HOST, DB_PORT, DB_USER, DB_PASS, DB_NAME must be set")
+	}
+
+	dsn := fmt.Sprintf(
+		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
+		host, port, user, pass, name, sslmode,
+	)
+
+	db, err = sql.Open("pgx", dsn)
+	if err != nil {
+		panic(fmt.Sprintf("Failed to open database: %v", err))
+	}
+
+	if err = db.Ping(); err != nil {
+		panic(fmt.Sprintf("Cannot connect to database: %v", err))
+	}
+
+	fmt.Println("✔️  Connected to PostgreSQL successfully")
+}
 
 func main() {
-	// Set Gin to release mode in production
+	// Inisialisasi DB
+	initDB()
+	defer db.Close()
+
+	// Set Gin mode
 	if os.Getenv("GIN_MODE") == "release" {
 		gin.SetMode(gin.ReleaseMode)
 	}
 
-	// Initialize Gin router
 	r := gin.Default()
 
-	// Add middleware for CORS
+	// Middleware CORS
 	r.Use(func(c *gin.Context) {
 		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
@@ -35,25 +73,88 @@ func main() {
 		c.Next()
 	})
 
-	// Define routes
-	r.POST("/itinerary", handleItineraryRequest)
+	// Routes
 	r.GET("/health", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{
-			"status": "ok",
-		})
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
 	r.POST("/signup", signupHandler)
 	r.POST("/signin", signinHandler)
+	r.POST("/itinerary", handleItineraryRequest)
 
-	// Get port from environment variable or use default
+	// Start server
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
 	}
+	fmt.Printf("🚀 Server running on port %s\n", port)
+	if err := r.Run(":" + port); err != nil {
+		fmt.Fprintf(os.Stderr, "Server error: %v\n", err)
+		os.Exit(1)
+	}
+}
 
-	// Start the server
-	fmt.Printf("Server is running on port %s\n", port)
-	r.Run(":" + port)
+func signupHandler(c *gin.Context) {
+	var req struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if req.Username == "" || req.Password == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "username and password required"})
+		return
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to hash password"})
+		return
+	}
+
+	_, err = db.Exec(
+		`INSERT INTO users (username, password) VALUES ($1, $2)`,
+		req.Username, string(hash),
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save user"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "user created"})
+}
+
+func signinHandler(c *gin.Context) {
+	var req struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if req.Username == "" || req.Password == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "username and password required"})
+		return
+	}
+
+	var storedHash string
+	err := db.QueryRow(
+		`SELECT password FROM users WHERE username = $1`,
+		req.Username,
+	).Scan(&storedHash)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid username or password"})
+		return
+	}
+
+	if bcrypt.CompareHashAndPassword([]byte(storedHash), []byte(req.Password)) != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid username or password"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "login success"})
 }
 
 func handleItineraryRequest(c *gin.Context) {
@@ -63,24 +164,19 @@ func handleItineraryRequest(c *gin.Context) {
 		return
 	}
 
-	// Convert request body to JSON
 	jsonData, err := json.Marshal(requestBody)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error marshaling JSON"})
 		return
 	}
 
-	// Create HTTP request
 	req, err := http.NewRequest("POST", "https://gsc2025-sps-418414887688.us-central1.run.app/run", bytes.NewBuffer(jsonData))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error creating request"})
 		return
 	}
-
-	// Set headers
 	req.Header.Set("Content-Type", "application/json")
 
-	// Create HTTP client and send request
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -89,60 +185,11 @@ func handleItineraryRequest(c *gin.Context) {
 	}
 	defer resp.Body.Close()
 
-	// Read response body
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error reading response"})
 		return
 	}
 
-	// Return the response
 	c.Data(resp.StatusCode, "application/json", body)
-}
-
-func signupHandler(c *gin.Context) {
-	var req struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(400, gin.H{"error": err.Error()})
-		return
-	}
-	if req.Username == "" || req.Password == "" {
-		c.JSON(400, gin.H{"error": "username and password required"})
-		return
-	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
-	if err != nil {
-		c.JSON(500, gin.H{"error": "failed to hash password"})
-		return
-	}
-	users[req.Username] = string(hash) // Simpan hashed password di memori
-	c.JSON(200, gin.H{"message": "user created"})
-}
-
-func signinHandler(c *gin.Context) {
-	var req struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(400, gin.H{"error": err.Error()})
-		return
-	}
-	if req.Username == "" || req.Password == "" {
-		c.JSON(400, gin.H{"error": "username and password required"})
-		return
-	}
-	hash, exists := users[req.Username]
-	if !exists {
-		c.JSON(401, gin.H{"error": "invalid username or password"})
-		return
-	}
-	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(req.Password)) != nil {
-		c.JSON(401, gin.H{"error": "invalid username or password"})
-		return
-	}
-	c.JSON(200, gin.H{"message": "login success"})
 }
