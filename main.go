@@ -19,20 +19,20 @@ var db *sql.DB
 
 func initDB() {
 	// Get environment variables
-	instanceConnectionName := os.Getenv("INSTANCE_CONNECTION_NAME")
 	dbUser := os.Getenv("DB_USER")
 	dbPass := os.Getenv("DB_PASS")
 	dbName := os.Getenv("DB_NAME")
+	dbHost := os.Getenv("DB_HOST") // Public IP: 34.122.48.1
 
-	if instanceConnectionName == "" || dbUser == "" || dbPass == "" || dbName == "" {
-		fmt.Printf("Missing environment variables:\nINSTANCE_CONNECTION_NAME: %s\nDB_USER: %s\nDB_PASS: %s\nDB_NAME: %s\n",
-			instanceConnectionName, dbUser, dbPass, dbName)
+	if dbUser == "" || dbPass == "" || dbName == "" || dbHost == "" {
+		fmt.Printf("Missing environment variables:\nDB_USER: %s\nDB_PASS: %s\nDB_NAME: %s\nDB_HOST: %s\n",
+			dbUser, dbPass, dbName, dbHost)
 		return
 	}
 
-	// Use TCP connection through Cloud SQL proxy
-	dsn := fmt.Sprintf("host=127.0.0.1 port=5432 user=%s password=%s dbname=%s sslmode=disable",
-		dbUser, dbPass, dbName)
+	// Use Public IP connection
+	dsn := fmt.Sprintf("host=%s port=5432 user=%s password=%s dbname=%s sslmode=disable",
+		dbHost, dbUser, dbPass, dbName)
 
 	fmt.Printf("Attempting to connect with DSN: %s\n", dsn)
 
