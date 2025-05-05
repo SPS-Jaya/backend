@@ -16,56 +16,50 @@ import (
 
 var db *sql.DB
 
-// initDB menginisialisasi koneksi ke PostgreSQL
 func initDB() {
 	var err error
 
-	// Ambil kredensial dari environment variables
-	host := os.Getenv("DB_HOST")       // e.g. "34.122.48.1"
-	port := os.Getenv("DB_PORT")       // e.g. "5432"
-	user := os.Getenv("DB_USER")       // e.g. "postgres"
-	pass := os.Getenv("DB_PASS")       // password Anda
-	name := os.Getenv("DB_NAME")       // nama database, misal "sps_db"
-	sslmode := os.Getenv("DB_SSLMODE") // e.g. "disable" atau "require"
+	// Ambil kredensial dari env var
+	instanceConn := os.Getenv("INSTANCE_CONNECTION_NAME") // "cool-state-453106-d5:us-central1:sps-db"
+	user := os.Getenv("DB_USER")                          // mis. "postgres"
+	pass := os.Getenv("DB_PASS")                          // password DB
+	name := os.Getenv("DB_NAME")                          // nama DB, mis. "sps_db"
 
-	if host == "" || port == "" || user == "" || pass == "" || name == "" {
-		panic("Environment variables DB_HOST, DB_PORT, DB_USER, DB_PASS, DB_NAME must be set")
+	if instanceConn == "" || user == "" || pass == "" || name == "" {
+		panic("Env vars INSTANCE_CONNECTION_NAME, DB_USER, DB_PASS, DB_NAME must be set")
 	}
 
+	// Pakai Unix socket Cloud Run menyediakan di /cloudsql/<instance-connection-name>
+	socketDir := fmt.Sprintf("/cloudsql/%s", instanceConn)
 	dsn := fmt.Sprintf(
-		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
-		host, port, user, pass, name, sslmode,
+		"host=%s user=%s password=%s dbname=%s sslmode=disable",
+		socketDir, user, pass, name,
 	)
 
 	db, err = sql.Open("pgx", dsn)
 	if err != nil {
 		panic(fmt.Sprintf("Failed to open database: %v", err))
 	}
-
 	if err = db.Ping(); err != nil {
 		panic(fmt.Sprintf("Cannot connect to database: %v", err))
 	}
 
-	fmt.Println("✔️  Connected to PostgreSQL successfully")
+	fmt.Println("✔️ Connected to Cloud SQL via Unix socket")
 }
 
 func main() {
-	// Inisialisasi DB
 	initDB()
 	defer db.Close()
 
-	// Set Gin mode
 	if os.Getenv("GIN_MODE") == "release" {
 		gin.SetMode(gin.ReleaseMode)
 	}
 
 	r := gin.Default()
-
-	// Middleware CORS
 	r.Use(func(c *gin.Context) {
 		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
-		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization")
+		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		if c.Request.Method == "OPTIONS" {
 			c.AbortWithStatus(204)
 			return
@@ -73,7 +67,6 @@ func main() {
 		c.Next()
 	})
 
-	// Routes
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
@@ -81,7 +74,6 @@ func main() {
 	r.POST("/signin", signinHandler)
 	r.POST("/itinerary", handleItineraryRequest)
 
-	// Start server
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
