@@ -19,12 +19,8 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o main .
 # Use a minimal alpine image
 FROM alpine:latest
 
-# Install required packages
-RUN apk --no-cache add \
-    ca-certificates \
-    postgresql-client \
-    && mkdir -p /cloudsql \
-    && chmod 777 /cloudsql
+# Install ca-certificates
+RUN apk --no-cache add ca-certificates
 
 # Set working directory
 WORKDIR /app
@@ -35,5 +31,5 @@ COPY --from=builder /app/main .
 # Expose port 8080
 EXPOSE 8080
 
-# Run the binary
+# Run the binary with explicit port binding
 CMD ["./main"]
