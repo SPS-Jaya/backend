@@ -2,55 +2,88 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
+	"net"
 	"net/http"
 	"os"
 
+	"cloud.google.com/go/cloudsqlconn"
 	"github.com/gin-gonic/gin"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"golang.org/x/crypto/bcrypt"
 )
 
 var db *sql.DB
 
-func initDB() {
-	var err error
+// initDB menginisialisasi koneksi via Cloud SQL Connector
+func initDB(ctx context.Context) *sql.DB {
+	// Ambil env vars
+	dbUser := os.Getenv("DB_USER")                        // e.g. "postgres"
+	dbPass := os.Getenv("DB_PASS")                        // DB password
+	dbName := os.Getenv("DB_NAME")                        // e.g. "sps_db"
+	instanceConn := os.Getenv("INSTANCE_CONNECTION_NAME") // e.g. "project:region:instance"
+	usePrivate := os.Getenv("PRIVATE_IP")                 // "true" jika pakai private IP (opsional)
 
-	// Ambil kredensial dari env var
-	instanceConn := os.Getenv("INSTANCE_CONNECTION_NAME") // e.g. "cool-state-453106-d5:us-central1:sps-db"
-	user := os.Getenv("DB_USER")                          // mis. "postgres"
-	pass := os.Getenv("DB_PASS")                          // password DB
-	name := os.Getenv("DB_NAME")                          // nama DB, mis. "sps_db"
-
-	if instanceConn == "" || user == "" || pass == "" || name == "" {
-		panic("Env vars INSTANCE_CONNECTION_NAME, DB_USER, DB_PASS, DB_NAME must be set")
+	// Validasi
+	if dbUser == "" || dbPass == "" || dbName == "" || instanceConn == "" {
+		log.Fatal("Env vars DB_USER, DB_PASS, DB_NAME, INSTANCE_CONNECTION_NAME must be set")
 	}
 
-	// Gunakan Unix socket yang disediakan Cloud Run di /cloudsql/<instance-connection-name>
-	socketDir := fmt.Sprintf("/cloudsql/%s", instanceConn)
-	// Sertakan port=5432 eksplisit agar pgx tahu gunakan port default
-	dsn := fmt.Sprintf(
-		"host=%s port=5432 user=%s password=%s dbname=%s sslmode=disable",
-		socketDir, user, pass, name,
-	)
-
-	db, err = sql.Open("pgx", dsn)
+	// Build DSN dasar untuk pgx
+	dsn := fmt.Sprintf("user=%s password=%s dbname=%s", dbUser, dbPass, dbName)
+	config, err := pgx.ParseConfig(dsn)
 	if err != nil {
-		panic(fmt.Sprintf("Failed to open database: %v", err))
-	}
-	if err = db.Ping(); err != nil {
-		panic(fmt.Sprintf("Cannot connect to database: %v", err))
+		log.Fatalf("pgx.ParseConfig: %v", err)
 	}
 
-	fmt.Println("✔️ Connected to Cloud SQL via Unix socket")
+	// Setup Cloud SQL Connector dialer dengan opsi
+	var opts []cloudsqlconn.Option
+	if usePrivate != "" {
+		opts = append(opts, cloudsqlconn.WithDefaultDialOptions(cloudsqlconn.WithPrivateIP()))
+	}
+	opts = append(opts, cloudsqlconn.WithLazyRefresh())
+
+	dialer, err := cloudsqlconn.NewDialer(ctx, opts...)
+	if err != nil {
+		log.Fatalf("cloudsqlconn.NewDialer: %v", err)
+	}
+
+	// Override dial function untuk pgx
+	config.DialFunc = func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return dialer.Dial(ctx, instanceConn)
+	}
+
+	// Daftarkan config ke driver pgx
+	connStr := stdlib.RegisterConnConfig(config)
+
+	// Buka pool koneksi
+	db, err := sql.Open("pgx", connStr)
+	if err != nil {
+		log.Fatalf("sql.Open: %v", err)
+	}
+
+	// Test koneksi
+	if err = db.PingContext(ctx); err != nil {
+		log.Fatalf("db.Ping: %v", err)
+	}
+
+	log.Println("✔️ Connected to Cloud SQL via Connector")
+	return db
 }
 
 func main() {
+	// Context untuk connector
+	ctx := context.Background()
+
 	// Inisialisasi DB
-	initDB()
+	db = initDB(ctx)
 	defer db.Close()
 
 	// Set Gin mode
@@ -60,7 +93,7 @@ func main() {
 
 	r := gin.Default()
 
-	// Middleware CORS
+	// CORS middleware
 	r.Use(func(c *gin.Context) {
 		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
@@ -73,6 +106,9 @@ func main() {
 	})
 
 	// Routes
+	r.GET("/", func(c *gin.Context) {
+		c.String(http.StatusOK, "ok")
+	})
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
@@ -85,10 +121,9 @@ func main() {
 	if port == "" {
 		port = "8080"
 	}
-	fmt.Printf("🚀 Server running on port %s\n", port)
+	log.Printf("🚀 Server listening on port %s", port)
 	if err := r.Run(":" + port); err != nil {
-		fmt.Fprintf(os.Stderr, "Server error: %v\n", err)
-		os.Exit(1)
+		log.Fatalf("Server error: %v", err)
 	}
 }
 
@@ -112,10 +147,10 @@ func signupHandler(c *gin.Context) {
 		return
 	}
 
-	_, err = db.Exec(
-		`INSERT INTO users (username, password) VALUES ($1, $2)`,
-		req.Username, string(hash),
-	)
+	_, err = db.ExecContext(c, `
+		INSERT INTO users (username, password)
+		VALUES ($1, $2)
+	`, req.Username, string(hash))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save user"})
 		return
@@ -139,10 +174,9 @@ func signinHandler(c *gin.Context) {
 	}
 
 	var storedHash string
-	err := db.QueryRow(
-		`SELECT password FROM users WHERE username = $1`,
-		req.Username,
-	).Scan(&storedHash)
+	err := db.QueryRowContext(c, `
+		SELECT password FROM users WHERE username = $1
+	`, req.Username).Scan(&storedHash)
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid username or password"})
 		return
