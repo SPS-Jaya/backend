@@ -11,6 +11,8 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
+	"strings"
 
 	"cloud.google.com/go/cloudsqlconn"
 	"github.com/gin-gonic/gin"
@@ -103,6 +105,41 @@ func main() {
 			return
 		}
 		c.Next()
+	})
+
+	// JSON parser endpoint: terima itinerary_markdown dan kembalikan JSON murni
+	r.POST("/jsonparser", func(c *gin.Context) {
+		// Tangkap input
+		var req struct {
+			ItineraryMarkdown string `json:"itinerary_markdown"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		// Hapus fence markdown
+		s := req.ItineraryMarkdown
+		s = strings.ReplaceAll(s, "```json", "")
+		s = strings.ReplaceAll(s, "```", "")
+
+		// Unescape \n dan \" pada string
+		// bungkus s dengan kutip ganda untuk strconv.Unquote
+		unquoted, err := strconv.Unquote(`"` + s + `"`)
+		if err != nil {
+			// fallback: gunakan s apa adanya
+			unquoted = s
+		}
+
+		// Parse ke struktur Go
+		var parsed []map[string]interface{}
+		if err := json.Unmarshal([]byte(unquoted), &parsed); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "failed to parse JSON: " + err.Error()})
+			return
+		}
+
+		// Kembalikan hasil parsing
+		c.JSON(http.StatusOK, parsed)
 	})
 
 	// Routes
